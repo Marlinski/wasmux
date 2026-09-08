@@ -23,11 +23,25 @@ WASI_SDK=${WASI_SDK:-$(echo "$WORK"/tools/wasi-sdk-*)}
 TARGET=${TARGET:-wasm32-wasip2}
 
 W2C=$WABT/bin/wasm2c
-RT=$WABT/wasm2c
 CC=$WASI_SDK/bin/clang
 AR=$WASI_SDK/bin/llvm-ar
 
-for needed in "$W2C" "$RT/wasm-rt.h" "$CC" "$AR"; do
+# Two layouts, because the two ways of getting wabt disagree. A release tarball installs the
+# wasm2c runtime under `share/wabt/wasm2c` with the public headers in `include`; a source
+# checkout keeps both in `wasm2c/`. Look for the implementation, then find the headers
+# wherever `wasm-rt.h` actually is.
+if [ -f "$WABT/share/wabt/wasm2c/wasm-rt-impl.c" ]; then
+  RT=$WABT/share/wabt/wasm2c
+  RT_INCLUDE=$WABT/include
+elif [ -f "$WABT/wasm2c/wasm-rt-impl.c" ]; then
+  RT=$WABT/wasm2c
+  RT_INCLUDE=$WABT/wasm2c
+else
+  echo "no wasm2c runtime under $WABT (looked in share/wabt/wasm2c and wasm2c)" >&2
+  exit 2
+fi
+
+for needed in "$W2C" "$RT_INCLUDE/wasm-rt.h" "$RT/wasm-rt-impl.c" "$CC" "$AR"; do
   [ -e "$needed" ] || { echo "missing: $needed (set WABT and WASI_SDK)" >&2; exit 2; }
 done
 
@@ -78,7 +92,7 @@ done
 # process instead of a host stack overflow. 400 fits inside a 1 MiB host wasm stack, which
 # is what a typical component runtime allows; raise both together if you raise either.
 CFLAGS=(--target="$TARGET" --sysroot="$WASI_SDK/share/wasi-sysroot" -O2
-        -I"$RT" -I"$GEN" -I"$HERE/csrc" -I"$HERE/csrc/shim"
+        -I"$RT_INCLUDE" -I"$RT" -I"$GEN" -I"$HERE/csrc" -I"$HERE/csrc/shim"
         -DWASM_RT_MEMCHECK_BOUNDS_CHECK=1
         -DWASM_RT_USE_MMAP=0
         -DWASM_RT_SKIP_SIGNAL_RECOVERY=1
