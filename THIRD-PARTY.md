@@ -59,15 +59,22 @@ permit, which is the FSF's own position on the pair. A combined binary of the tw
 not something this project can offer you a licence for.
 
 **So the archive is not distributed here.** It is not in the repository, and this is why. Build
-it yourself, for your own target, and it never leaves your build:
+it yourself, for your own target:
 
 ```sh
 ./toolchain/fetch-tools.sh      # wabt and a wasi-sdk
 ./toolchain/build-archive.sh    # -> bin/libwasmux-images.a
 ```
 
-Without it, `build.rs` says so and the `interp` backend runs the same programs — slower, never
-broken. See `docs/INTEGRATION.md`.
+and point your own build at it with `WASMUX_ARCHIVE_DIR=/path/to/wasmux/bin`. Without it,
+`build.rs` says so and the `interp` backend runs the same programs — about ten times slower on
+compute, never broken. See `docs/INTEGRATION.md`.
+
+Note what the incompatibility is *about*: distribution. A binary you build and run yourself
+conveys nothing to anyone and raises no question. It becomes one when you distribute something
+that links the archive — then the same GPL-2.0/Apache-2.0 problem is yours. The interpreter
+backend does not have it: `busybox.wasm` stays a data file that wasmi reads at run time rather
+than code linked into your binary, which is the ordinary aggregation case.
 
 If you build an image set from sources whose licences *are* Apache-compatible, the archive is
 fine to distribute and this note does not apply to it.

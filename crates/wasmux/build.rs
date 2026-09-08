@@ -65,6 +65,7 @@ fn main() {
     // build, which is why the AOT backend is not available natively.
     let target = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let has_aot = std::env::var("CARGO_FEATURE_AOT").is_ok();
+    println!("cargo:rerun-if-env-changed={ARCHIVE_DIR_VAR}");
     if target == "wasm32" && has_aot {
         let archive = find_archive(&bin);
         match archive {
@@ -75,19 +76,47 @@ fn main() {
             }
             None => {
                 println!(
-                    "cargo:warning=wasmux: bin/libwasmux-images.a is missing, so the compiled-in \
-                     backend is unavailable and the interpreter will run the programs instead — \
-                     correct, about ten times slower. The archive is deliberately not \
-                     distributed (it would combine GPL-2.0-only and Apache-2.0 code in one \
-                     binary; see THIRD-PARTY.md). Build it with `toolchain/build-archive.sh` in \
-                     a wasmux checkout, or keep the `interp` feature on and ignore this."
+                    "cargo:warning=wasmux: no libwasmux-images.a, so the compiled-in backend is \
+                     unavailable and the interpreter will run the programs instead — correct, \
+                     about ten times slower on compute. The archive is not distributed with \
+                     this crate (it would combine GPL-2.0-only and Apache-2.0 code in one \
+                     binary; see THIRD-PARTY.md). To use one: build it with \
+                     `toolchain/build-archive.sh` in a wasmux checkout and set \
+                     {ARCHIVE_DIR_VAR} to the directory holding it. Or keep the `interp` \
+                     feature on and ignore this."
                 );
             }
         }
     }
 }
 
+/// Where a consumer can point us at an archive it built itself.
+const ARCHIVE_DIR_VAR: &str = "WASMUX_ARCHIVE_DIR";
+
+/// The directory holding `libwasmux-images.a`, if there is one.
+///
+/// Two places, and the environment wins. That is not a convenience: this crate does not
+/// distribute the archive, because it would combine GPL-2.0-only BusyBox-derived code with
+/// Apache-2.0 `wasm-rt` in one binary and those licences are incompatible (see
+/// THIRD-PARTY.md). So a consumer who wants the compiled-in backend builds the archive
+/// itself, and then needs a way to say where it went — a git dependency's checkout is not
+/// somewhere you can drop a file.
+///
+/// The `bin/` fallback is for working inside a wasmux checkout, where `make archive` puts it
+/// exactly there.
 fn find_archive(bin: &Path) -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os(ARCHIVE_DIR_VAR) {
+        let dir = PathBuf::from(dir);
+        if dir.join("libwasmux-images.a").exists() {
+            return Some(dir);
+        }
+        println!(
+            "cargo:warning=wasmux: {ARCHIVE_DIR_VAR} is set to {} but there is no \
+             libwasmux-images.a there.",
+            dir.display()
+        );
+        return None;
+    }
     if bin.join("libwasmux-images.a").exists() {
         return Some(bin.to_path_buf());
     }

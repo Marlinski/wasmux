@@ -41,24 +41,43 @@ outright. Measured on the CLI built for `wasm32-wasip2`:
 Ninety-eight bytes. So keeping `interp` on is free when the archive is there, and it is what
 saves you when it is not.
 
-**The archive is not shipped, and you have to build it to get the fast path.** It combines
+**The archive is not shipped, and you build it to get the fast path.** It combines
 GPL-2.0-only BusyBox-derived code with Apache-2.0 `wasm-rt` in one binary, and those two
 licences are incompatible, so this project cannot hand you that file — see
-[THIRD-PARTY.md](../THIRD-PARTY.md). Building it locally is a one-off and nothing is
-redistributed:
+[THIRD-PARTY.md](../THIRD-PARTY.md). Building it yourself is a one-off, takes about 45
+seconds, and redistributes nothing:
 
 ```sh
-./toolchain/fetch-tools.sh                     # wabt and a wasi-sdk, into toolchain/build/
-./toolchain/build-archive.sh                   # -> bin/libwasmux-images.a  (~45 s)
+git clone https://github.com/Marlinski/wasmux && cd wasmux
+./toolchain/fetch-tools.sh                          # wabt and a wasi-sdk, into toolchain/build/
+./toolchain/build-archive.sh                        # -> bin/libwasmux-images.a
 TARGET=wasm32-wasip1 ./toolchain/build-archive.sh   # or for another target
 ```
 
-Until you do, `build.rs` prints a warning and `interp` runs the same programs about ten times
-slower — correct, just slower. That is also what happens on a target the archive was not built
+Then tell your build where it went. A git dependency's checkout is not somewhere you can drop
+a file, so `build.rs` reads an environment variable:
+
+```sh
+WASMUX_ARCHIVE_DIR=/path/to/wasmux/bin cargo build --target wasm32-wasip2
+```
+
+Set it in `.cargo/config.toml` (`[env]`), your `Makefile`, or CI — wherever your build already
+keeps such things. `build.rs` re-runs when it changes, and says so if the directory has no
+archive in it.
+
+Until you do, `build.rs` prints a warning and `interp` runs the same programs — correct, about
+ten times slower on compute. That is also what happens on a target the archive was not built
 for. With `interp` *off* and no archive the crate does not compile at all: it refuses a
 configuration with no usable backend, and the error says which of the two fixes you want.
 
-So: take the defaults, and build the archive when the speed matters.
+**One thing to weigh before you do this for something you ship.** The incompatibility is about
+*distribution*, not about building: a combined binary you build and run yourself conveys
+nothing to anybody. If you distribute a component that links the archive, the same
+GPL-2.0/Apache-2.0 problem applies to that component. Either stay on the interpreter for
+shipped builds, or build an image set whose licences are Apache-compatible — `bin/` is
+produced by `toolchain/build-images.sh` and nothing forces it to be BusyBox.
+
+So: take the defaults, and build the archive when the speed matters and the licences allow.
 
 ## 2. Decide how each tool gets in
 
