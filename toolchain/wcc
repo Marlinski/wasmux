@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# The guest C compiler: clang targeting bare `wasm32`, against wasmux's musl.
+#
+# Not wasi-sdk. A guest program is a Linux binary: its libc talks to the kernel through the
+# `wasmux` import module, not through WASI. So this is a freestanding wasm32 target with our
+# own sysroot, and none of clang's WASI defaults.
+#
+#   WCC_BARE=1        no sysroot, no libc, no crt. Used to build musl itself.
+#   WASMUX_SYSROOT    where musl was installed. Required unless WCC_BARE is set.
+#   CLANG             the compiler to use (default: clang-20).
+#
+# The bulk of this script is a filter: autoconf and BusyBox pass flags that mean nothing to
+# wasm-ld, and a wrapper that forwards them unchanged fails a hundred configure tests.
+CLANG=${CLANG:-clang-20}
+SYSROOT=${WASMUX_SYSROOT:?WASMUX_SYSROOT must point at the guest sysroot}
+
+# `setjmp` and `longjmp` are imports the kernel implements with Asyncify, so the compiler must
+# not try to lower them itself, and must not assume a builtin.
+COMMON=(--target=wasm32 -D__WASMUX_SJLJ_IMPORT=1 -D__wasmux__ -D__linux__=1 -D__unix__=1
+        -fno-builtin-setjmp -Wno-unused-command-line-argument)
+
+link=1
+args=()
+for a in "$@"; do
+  case "$a" in
+    -c|-E|-S|-M|-MM|--version|-dumpmachine|-print-*) link=0 ;;
+    -r|-Wl,-r) link=2 ;;   # relocatable partial link: no crt, no libc
+  esac
+  case "$a" in
+    # Flags an ELF toolchain understands and wasm-ld does not.
+    -static|-static-libgcc|-Wl,--sort-common|-Wl,--sort-section*|-Wl,--warn-common\
+    |-Wl,--gc-sections|-Wl,-z,*|-Wl,--verbose|-Wl,-Map*|-Wl,--start-group|-Wl,--end-group\
+    |-Wl,--as-needed|-Wl,--no-as-needed|-Wl,-shared|-Wl,-Bstatic|-Wl,-Bdynamic\
+    |-fno-guess-branch-probability|-falign-*|-finline-limit=*|-fno-unwind-tables\
+    |-fno-asynchronous-unwind-tables|-mpreferred-stack-boundary=*|-march=*|-mtune=*) ;;
+    *) args+=("$a") ;;
+  esac
+done
+
+if [ -n "${WCC_BARE:-}" ]; then
+  exec "$CLANG" "${COMMON[@]}" "${args[@]}"
+fi
+
+INC=(-nostdinc -isystem "$SYSROOT/include")
+
+# clang's compiler-rt builtins for wasm32: __multi3, the float helpers, and friends. Shipped
+# with clang, but not found automatically on a target clang does not think it supports.
+BUILTINS=${WASMUX_BUILTINS:-$("$CLANG" -print-resource-dir 2>/dev/null)/lib/wasi/libclang_rt.builtins-wasm32.a}
+
+case $link in
+  2) exec "$CLANG" "${COMMON[@]}" "${INC[@]}" -nostdlib "${args[@]}" ;;
+  0) exec "$CLANG" "${COMMON[@]}" "${INC[@]}" "${args[@]}" ;;
+esac
+
+# A guest executable. `__stack_pointer` is exported because Asyncify does not save globals, so
+# the kernel restores it by hand on a `longjmp`; `__wasmux_sigpending` is the flag musl polls
+# for a pending signal.
+exec "$CLANG" "${COMMON[@]}" "${INC[@]}" -nostdlib "$SYSROOT/lib/crt1.o" "${args[@]}" \
+     -L"$SYSROOT/lib" -lc "$BUILTINS" \
+     -Wl,--gc-sections \
+     -Wl,-z,stack-size=${WCC_STACK:-1048576} \
+     -Wl,--export=__stack_pointer \
+     -Wl,--export=__wasmux_sigpending

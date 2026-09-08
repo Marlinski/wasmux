@@ -1,0 +1,53 @@
+# What is in bin/, and where it came from.
+#
+# These are the guest programs: wasm32 modules built against wasmux's musl and instrumented
+# with Binaryen's Asyncify pass. `make images` reproduces them; `make manifest` refreshes the
+# hashes below. Check them before trusting a checkout you did not build.
+
+[abi]
+version = 1                       # must match wasmux::ABI_VERSION
+
+[toolchain]
+clang = "20.1.2"                  # wasm32 target, position-independent
+binaryen = "108"                  # wasm-opt --asyncify
+wabt = "1.0.41"                   # wasm2c, for the compiled-in backend
+musl = "1.2.4"                    # with wasmux's arch/wasm32 port
+oniguruma = "6.9.10"              # jq's regex engine, from jq's own vendor/
+wasi-sdk = "34.0"                 # compiles the generated C into the archive
+
+# The programs above, translated to C and compiled for one target. `build.rs` links this when
+# the `aot` feature is on and the consumer's target matches; otherwise the interpreter runs the
+# .wasm files instead, so a mismatch is slower and never broken.
+#
+# NOT distributed: the archive puts GPL-2.0-only BusyBox-derived code and Apache-2.0 wasm-rt
+# in one binary, and those licences are incompatible. `make archive` builds it locally, where
+# no redistribution happens. See THIRD-PARTY.md.
+[archive]
+file = "libwasmux-images.a"
+built_by = "toolchain/build-archive.sh"
+target = "wasm32-wasip2"          # the default; override with TARGET=
+max_call_depth = 400              # the fuse; sized for a 1 MiB host wasm stack
+
+[[image]]
+name = "busybox"
+version = "1.37.0"
+file = "busybox.wasm"
+commands = "busybox.commands"
+description = "The shell (hush) and 135 applets: sed, awk, grep, find, sort, tar, gzip, vi and the rest."
+notes = """
+Configured NOMMU: no fork, so hush rather than ash. Networking applets are left out, because
+there is no socket syscall to serve them. SHOW_USAGE and FEATURE_VERBOSE_USAGE are on: `sed
+--help` printing nothing makes "ask the command, do not guess its flags" a lie, and the full
+usage text for all 135 applets costs 31 KB.
+"""
+
+[[image]]
+name = "jq"
+version = "1.8.2"
+file = "jq.wasm"
+commands = "jq.commands"
+description = "jq 1.8, with oniguruma, so test/match/sub/gsub/capture/scan/splits all work."
+notes = """
+Oniguruma costs 584 KB of the 1.45 MB image and is not optional in practice: without it those
+functions do not behave differently, they refuse at run time. They are core jq idioms.
+"""

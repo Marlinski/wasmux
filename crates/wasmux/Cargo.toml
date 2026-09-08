@@ -1,0 +1,67 @@
+[package]
+name = "wasmux"
+description = "A POSIX process sandbox that runs inside your own WebAssembly component: real BusyBox and friends, on a filesystem you provide."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["wasm", "webassembly", "posix", "sandbox", "shell"]
+categories = ["wasm", "os", "virtualization"]
+# The prebuilt guest programs and the AOT archive ship with the crate so that a
+# consumer needs no C toolchain, no wabt and no wasi-sdk.
+include = ["src/**", "build.rs", "../../bin/**", "../../README.md"]
+
+[features]
+# The AOT engine: programs are translated to C by wasm2c and compiled into the
+# consumer's own module. Fast (2-3x native) and the shape to deploy.
+default = ["aot", "interp"]
+aot = []
+# The interpreter engine: wasmi decodes and runs the same programs. Slower
+# (10-20x) but needs nothing beyond Rust, so it is what makes `cargo test` work
+# with no C toolchain, and the fallback on a target with no prebuilt archive.
+interp = ["dep:wasmi"]
+# The behaviour corpus and its runner, so the same cases can be run natively by
+# `cargo test` and inside a component by `wasmux-corpus`. Off by default: a
+# consumer has no use for it.
+corpus = []
+# `HostVfs`, a `Vfs` over `std::fs`. For the CLI and the tests, not for a guest.
+host-vfs = []
+
+[dependencies]
+# The core carries no dependencies at all. Each engine brings its own, and only
+# the interpreter needs one.
+# `portable-dispatch` picks wasmi's loop-based instruction dispatch instead of the tail-call
+# one. The tail-call backend is faster, but it only has bounded stack use when the optimizer
+# turns its calls into jumps, so an unoptimized consumer build overflows the host stack after
+# a few thousand guest instructions. A library must not depend on how it is compiled.
+wasmi = { version = "2", optional = true, default-features = false, features = [
+    "std",
+    "validate",
+    "portable-dispatch",
+] }
+
+[dev-dependencies]
+wasmux = { path = ".", features = ["interp", "host-vfs", "corpus"] }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+# A panic anywhere in this library aborts the consumer's whole component: the
+# wasm32 targets have no unwinder, so `catch_unwind` cannot save it (verified).
+# The kernel is therefore panic-free by construction, and these lints are the
+# enforcement. See docs/DESIGN.md, "No panics".
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "warn"
+integer_division = "warn"
+todo = "deny"
+unimplemented = "deny"
+
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ["cfg(wasmux_aot_linked)"]

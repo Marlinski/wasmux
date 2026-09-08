@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/wasmux", "crates/wasmux-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Marlinski/wasmux"
+
+[workspace.dependencies]
+# `default-features = false` so a member can pick the backend it wants; see wasmux-cli.
+wasmux = { path = "crates/wasmux", default-features = false }
+
+# Release profile tuned for a guest component: small and fast, no unwinding
+# (wasm32-wasip2 has no unwinder, so `panic = "abort"` is the only honest setting).
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# The interpreter backend uses a lot of host stack per guest frame when it is not optimized,
+# enough to overflow a test thread. Optimizing the test profile keeps `cargo test` working
+# with the default stack size, and makes the corpus run in seconds rather than minutes.
+[profile.test]
+opt-level = 2
+[profile.dev.package."*"]
+opt-level = 2

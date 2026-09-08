@@ -1,0 +1,33 @@
+[package]
+name = "wasmux-cli"
+description = "Run a wasmux sandbox from a terminal: a shell, a command, or the test corpus."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "wasmux"
+
+[[bin]]
+name = "wasmux"
+path = "src/main.rs"
+
+# The benchmark, likewise built for whatever backend is selected.
+[[bin]]
+name = "wasmux-bench"
+path = "src/bin/wasmux-bench.rs"
+
+# Runs the behaviour corpus wherever it is built. Under wasmtime this is the only thing that
+# exercises the compiled-in backend against the same table the host tests use.
+[[bin]]
+name = "wasmux-corpus"
+path = "src/bin/wasmux-corpus.rs"
+
+# The backend is chosen the same way a consumer chooses it, by feature, so building the CLI
+# for wasm32 exercises exactly what an integrator gets.
+[features]
+default = ["aot", "interp"]
+aot = ["wasmux/aot"]
+interp = ["wasmux/interp"]
+
+[dependencies]
+wasmux = { workspace = true, features = ["host-vfs", "corpus"] }

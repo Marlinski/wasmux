@@ -1,0 +1,10 @@
+target/
+*.o
+# `bin/libwasmux-images.a` is deliberately NOT checked in: it combines
+# GPL-2.0-only BusyBox-derived code with Apache-2.0 wasm-rt in one binary, and
+# those two licences are not compatible. Build it locally with
+# toolchain/build-archive.sh. See THIRD-PARTY.md.
+*.a
+# Everything the toolchain downloads or generates.
+toolchain/build/
+.direnv/
