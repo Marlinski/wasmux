@@ -75,8 +75,12 @@ fn main() {
             }
             None => {
                 println!(
-                    "cargo:warning=wasmux: bin/libwasmux-images.a is missing, so no programs are compiled in. \
-                     Run `make images` in the wasmux checkout, or enable the `interp` feature."
+                    "cargo:warning=wasmux: bin/libwasmux-images.a is missing, so the compiled-in \
+                     backend is unavailable and the interpreter will run the programs instead — \
+                     correct, about ten times slower. The archive is deliberately not \
+                     distributed (it would combine GPL-2.0-only and Apache-2.0 code in one \
+                     binary; see THIRD-PARTY.md). Build it with `toolchain/build-archive.sh` in \
+                     a wasmux checkout, or keep the `interp` feature on and ignore this."
                 );
             }
         }
