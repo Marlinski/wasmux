@@ -92,6 +92,12 @@ done
 # process instead of a host stack overflow. 400 fits inside a 1 MiB host wasm stack, which
 # is what a typical component runtime allows; raise both together if you raise either.
 CFLAGS=(--target="$TARGET" --sysroot="$WASI_SDK/share/wasi-sysroot" -O2
+        # wasm2c's generated C carries its own path into the object through the assert
+        # macros, so without this the *consumer's* binary ends up quoting whoever built the
+        # archive: "/home/someone/wasmux/toolchain/build/images/busybox_0.c". Map the
+        # checkout away and two people's archives also become comparable.
+        -ffile-prefix-map="$(cd "$ROOT" && pwd)=wasmux"
+        -ffile-prefix-map="$(cd "$WASI_SDK" && pwd)=wasi-sdk"
         -I"$RT_INCLUDE" -I"$RT" -I"$GEN" -I"$HERE/csrc" -I"$HERE/csrc/shim"
         -DWASM_RT_MEMCHECK_BOUNDS_CHECK=1
         -DWASM_RT_USE_MMAP=0
@@ -108,10 +114,13 @@ sources=("$HERE/csrc/glue.c" "$HERE/csrc/sjlj-rt.c"
          "$RT/wasm-rt-impl.c" "$RT/wasm-rt-mem-impl.c" "$RT/wasm-rt-exceptions-impl.c"
          "$GEN"/*_[0-9]*.c)
 
+# An object is stale if its source is newer *or if this script is* — the flags live here, and
+# a flag change that does not invalidate the objects silently produces an archive built with
+# the old ones. That cost an afternoon: adding -ffile-prefix-map appeared to do nothing.
 printf '%s\n' "${sources[@]}" | xargs -P "$JOBS" -I{} bash -c '
   src={}
   obj='"$WORK"'/obj/$(basename "${src%.c}").o
-  if [ ! -f "$obj" ] || [ "$src" -nt "$obj" ]; then
+  if [ ! -f "$obj" ] || [ "$src" -nt "$obj" ] || [ '"$HERE"'/build-archive.sh -nt "$obj" ]; then
     "$0" "${@:1}" -c "$src" -o "$obj" || exit 1
   fi' "$CC" "${CFLAGS[@]}"
 
