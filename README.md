@@ -120,6 +120,10 @@ toolchain/            how the contents of bin/ are produced
   build. Downloading a wasm module into the filesystem and running it does not work, by
   design.
 - **No threads.** `clone` for threads returns `ENOSYS`.
+- **No terminal, unless asked.** `isatty` says no, so tools emit text rather than colour and
+  escape sequences — which is what an agent wants to read. For a person at a keyboard, the
+  `tty` feature and `Command::terminal` give the guest a real one, and then hush has its
+  prompt, history and line editing. Off by default, at compile time and at run time.
 - **No sockets, and a `HostCommand` is where a network belongs.** Reaching the outside is the
   embedder's decision, made under the embedder's policy, in the embedder's code.
 - **A compute loop is not preemptible.** `Limits::wall_clock` bounds it at syscall boundaries,

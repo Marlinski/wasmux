@@ -129,6 +129,9 @@ pub const VSUSP: usize = 10;
 pub const VEOL: usize = 11;
 pub const VWERASE: usize = 14;
 pub const NCCS_KERNEL: usize = 19;
+pub const CS8: u32 = 0o60;
+pub const CREAD: u32 = 0o200;
+pub const B38400: u32 = 0o17;
 
 // poll
 pub const POLLIN: i16 = 1;

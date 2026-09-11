@@ -157,6 +157,37 @@ consumer is compiled.
   synthesized and never reach a mount, so an integrator implements storage and nothing else.
   A directory the kernel invents yields to a real one of the same name.
 
+## A terminal, when there really is one
+
+`isatty` answering no is a fact about the usual deployment, not a principle. Inside an agent
+it is simply true: the streams are buffers. In front of a person it is false, and the cost of
+saying it anyway is a shell with no prompt, no history and no line editing — everything
+BusyBox's `FEATURE_EDITING` was compiled in to provide, sitting in the image unreachable.
+
+So a session can be given a terminal, and two things gate it: the `tty` feature at compile
+time and `Command::terminal` at run time. Both default to off, and a consumer that does
+nothing gets precisely the behaviour above — which is why the first tests in `tests/tty.rs`
+are the ones asserting that nothing changed.
+
+The part worth understanding is who owns the settings. The guest does. It reads them with
+`TCGETS`, writes them with `TCSETS`, and the kernel keeps them for the session. The host
+follows: `Session::terminal_raw` reports whether the guest has cleared `ICANON`, and
+`Session::terminal_signals` whether it still wants Ctrl-C to raise one. Both flip within a
+single line — BusyBox's line editor takes raw mode to read the line and gives it back to run
+the command — so a host reads them every time round its loop rather than once.
+
+Getting that wrong is the failure to design against: if both ends echo, every keystroke
+appears twice; if neither does, typing is invisible. The host mirrors exactly what the guest
+changed — `ICANON`, `ECHO`, `ECHONL`, `ISIG`, `VMIN`/`VTIME` — and nothing else. `cfmakeraw`
+is the wrong tool here, because it also clears `OPOST`, which the guest did not ask for, and
+the result is output that stairsteps down the screen.
+
+What is still missing: Ctrl-C cannot interrupt a running command. While one runs, the guest
+has restored `ISIG`, so the host's terminal raises `SIGINT` against the host process, and
+there is no way into a session for a signal from outside. `Limits::wall_clock` is what bounds
+a runaway command today. Delivering a signal into a session is the missing piece, and
+`send_signal` in the syscall layer is where it would land.
+
 ## What is deliberately not here
 
 - **Networking.** No socket syscall, no networking tool. Adding it would mean routing through
@@ -164,5 +195,9 @@ consumer is compiled.
 - **Threads.** `clone` for threads returns `ENOSYS`. Every program here is single-threaded.
 - **`fork`.** Needs copy-on-write, which needs an MMU. Possible in principle by copying a
   whole memory and rebuilding the stack with Asyncify; not needed by anything shipped.
-- **A terminal.** `isatty` says no, truthfully: the standard streams are buffers the host
-  owns. That also keeps `jq` from emitting colour and shells out of line-editing paths.
+- **A terminal, unless one is asked for.** By default `isatty` says no, truthfully: the
+  standard streams are buffers the host owns, which keeps `jq` from emitting colour and
+  shells out of line-editing paths. That is the right answer for an agent, and it stays the
+  default. The `tty` feature and `Command::terminal` together change it for the case where
+  the answer is different — a person at a keyboard. See *A terminal, when there really is
+  one* above.

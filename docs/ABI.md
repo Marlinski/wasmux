@@ -84,6 +84,12 @@ About 130 are implemented; the rest return `ENOSYS`. Notable choices:
   fault to make it lazy. `munmap` succeeds and does nothing.
 - `utimensat` does not store times, but does require the path to exist, because `touch` uses
   its failure to decide whether to create the file.
+- `ioctl` answers the terminal requests — `TIOCGWINSZ`, `TCGETS`, and `TCSETS` with the two
+  that differ from it only in when they take effect — on the standard streams, and only when
+  the session was given a terminal. Without one they are all `ENOTTY`, which is what makes
+  `isatty` say no. `struct termios` is the `asm-generic` layout, 36 bytes: four flag words,
+  the line discipline and 19 control characters. musl's own struct is larger and reads back
+  only what was filled, exactly as on a real kernel.
 
 ## Building a program for wasmux
 

@@ -4,6 +4,8 @@
 //! host directory and runs a command in it, so what you see here is what a consumer of the
 //! library gets, minus the terminal.
 
+mod tty;
+
 use std::io::{IsTerminal, Read, Write};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -30,6 +32,8 @@ options:
     -h, --help             this text
 
 Standard input is passed through, so `echo hi | wasmux -c 'tr a-z A-Z'` works.
+With no command and a terminal on both ends, this is an interactive shell: a real prompt,
+history and line editing, ended with Ctrl-D or `exit`.
 ";
 
 fn main() -> ExitCode {
@@ -130,6 +134,10 @@ fn run() -> Result<u8, String> {
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal();
     stream |= conversational;
+    // Only such a session gets a terminal, and only then does the shell run its interactive
+    // path. Everything else — a pipe, -c, a named command — keeps the default the library
+    // ships with, where `isatty` says no and the output is text rather than a screen.
+    let terminal = if conversational { tty::size() } else { None };
 
     let prepared = match (&script, command.split_first()) {
         (Some(text), _) => sandbox.shell(text),
@@ -141,10 +149,17 @@ fn run() -> Result<u8, String> {
     // interactive shell looks like from here. `drive` answers each request and closes the
     // stream at end of file, so a redirected stdin still ends the way the guest expects.
     let prepared = prepared.interactive_stdin();
+    #[cfg(feature = "tty")]
+    let prepared = match terminal {
+        Some((columns, rows)) => prepared.terminal(columns, rows),
+        None => prepared,
+    };
 
     let started = Instant::now();
     let mut session = prepared.spawn().map_err(|e| e.to_string())?;
-    let output = drive(&mut session, stream)?;
+    // Held for the whole session: dropping it puts the terminal back, on every path out.
+    let mut host = terminal.and_then(|_| tty::HostTerminal::take());
+    let output = drive(&mut session, stream, host.as_mut())?;
     if stats {
         eprintln!(
             "wasmux: {} syscalls in {:.3}s{}",
@@ -166,11 +181,20 @@ fn run() -> Result<u8, String> {
 }
 
 /// Step the session to completion, optionally writing output as it appears.
-fn drive(session: &mut Session, stream: bool) -> Result<Output, String> {
+///
+/// `host` is this process's terminal, when the session was given one. The guest owns the
+/// settings and this loop follows them: a shell clears `ICANON` to edit a line and restores it
+/// to run a command, so the state is read every time round rather than once.
+fn drive(
+    session: &mut Session,
+    stream: bool,
+    mut host: Option<&mut tty::HostTerminal>,
+) -> Result<Output, String> {
     loop {
         let progress = session
             .step(Budget::syscalls(20_000))
             .map_err(|e| e.to_string())?;
+        tty::follow(host.as_deref_mut(), session);
         // Drain after the step that produced the output and before anything that blocks on
         // the user. Draining at the top of the loop instead would hold a command's output
         // until the next one was typed, because the wait for standard input comes first.

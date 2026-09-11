@@ -2155,17 +2155,19 @@ fn sys_ioctl(ctx: &mut Ctx, s: &mut dyn Suspend, fd: i32, request: u32, argument
     }
     let sh = ctx.shared();
     let desc = sh.descs.get(entry.desc).ok_or(Errno::BADF)?;
-    if !desc.is_tty() {
+    // Only the standard streams can be a terminal, and only when the session was given one.
+    // Without a terminal every request below is ENOTTY, which is what makes `isatty` say no.
+    if !desc.is_std_stream() || !has_terminal(ctx) {
         return Err(Errno::NOTTY.into());
     }
     match request {
-        // A window size makes isatty succeed and gives the shell a width. Terminal attributes
-        // are refused, which puts BusyBox into its line-at-a-time path: right, because there
-        // is no terminal here, only a pipe the host owns.
+        // A window size is what musl's `isatty` asks for, so answering it is what makes a
+        // program believe in the terminal, and the size is what a shell lays its line out to.
         TIOCGWINSZ => {
+            let (cols, rows) = terminal_size(ctx);
             let mut m = memory(s);
-            m.put_u16(argument, 24)?;
-            m.put_u16(argument.wrapping_add(2), 80)?;
+            m.put_u16(argument, rows)?;
+            m.put_u16(argument.wrapping_add(2), cols)?;
             m.put_u16(argument.wrapping_add(4), 0)?;
             m.put_u16(argument.wrapping_add(6), 0)?;
             Ok(0)
@@ -2176,8 +2178,62 @@ fn sys_ioctl(ctx: &mut Ctx, s: &mut dyn Suspend, fd: i32, request: u32, argument
             memory(s).put_u32(argument, group as u32)?;
             Ok(0)
         }
+        #[cfg(feature = "tty")]
+        TCGETS => {
+            let bytes = match &ctx.shared().terminal {
+                Some(t) => t.termios.encode(),
+                None => return Err(Errno::NOTTY.into()),
+            };
+            memory(s).put(argument, &bytes)?;
+            Ok(0)
+        }
+        // The three differ only in when they take effect, and nothing here buffers, so they
+        // are one case. This is the call that hands line editing to the guest: clearing
+        // ICANON is the guest saying it will echo and erase for itself, and
+        // `Session::terminal_raw` is how the host finds out and stops doing it too.
+        #[cfg(feature = "tty")]
+        TCSETS | TCSETSW | TCSETSF => {
+            let bytes = memory(s)
+                .bytes(argument, crate::kernel::tty::TERMIOS_BYTES as u32)?
+                .to_vec();
+            let next = crate::kernel::tty::Termios::decode(&bytes).ok_or(Errno::INVAL)?;
+            match &mut ctx.shared().terminal {
+                Some(t) => t.termios = next,
+                None => return Err(Errno::NOTTY.into()),
+            }
+            Ok(0)
+        }
         TIOCSPGRP | TIOCSWINSZ | TIOCSCTTY | TIOCNOTTY => Ok(0),
         _ => Err(Errno::NOTTY.into()),
+    }
+}
+
+/// Whether this session has a terminal at all. Without the `tty` feature, never.
+fn has_terminal(ctx: &mut Ctx) -> bool {
+    #[cfg(feature = "tty")]
+    {
+        ctx.shared().terminal.is_some()
+    }
+    #[cfg(not(feature = "tty"))]
+    {
+        let _ = ctx;
+        false
+    }
+}
+
+/// The terminal's size, for `TIOCGWINSZ`.
+fn terminal_size(ctx: &mut Ctx) -> (u16, u16) {
+    #[cfg(feature = "tty")]
+    {
+        match &ctx.shared().terminal {
+            Some(t) => (t.cols, t.rows),
+            None => (80, 24),
+        }
+    }
+    #[cfg(not(feature = "tty"))]
+    {
+        let _ = ctx;
+        (80, 24)
     }
 }
 

@@ -338,7 +338,27 @@ async fn run_shell(sandbox: &Sandbox, script: &str) -> Result<String, MyError> {
 ```
 
 To stream output to a user as it appears, call `session.take_stdout()` inside the loop; it
-returns only what is new.
+returns only what is new. Take it *after* the `step` that produced it and *before* anything
+that blocks — a wait for standard input especially. Draining at the top of the loop instead
+puts it after that wait, and each command's output is then held until the next one is typed.
+
+### A terminal, for a person rather than an agent
+
+By default `isatty` says no inside the sandbox, which is what you want when the output is
+going to a model: tools emit text, not colour codes and cursor movement. If what you are
+building has a person at a keyboard, enable the `tty` feature and give the session a terminal:
+
+```rust
+let mut session = sandbox.command("sh").interactive_stdin().terminal(columns, rows).spawn()?;
+```
+
+The shell then runs its interactive path, with a real prompt. For line editing and history
+there is one more obligation: the guest owns the terminal settings and your host has to follow
+them, or you get every keystroke twice. Each time round the loop, mirror
+`session.terminal_raw()` and `session.terminal_signals()` onto your own terminal — clearing
+`ICANON`, `ECHO`, `ECHONL` and, when signals are off, `ISIG`. Mirror only those. `cfmakeraw`
+also clears `OPOST`, which the guest did not ask for, and the output stairsteps.
+`crates/wasmux-cli/src/tty.rs` is the whole of it, in about eighty lines.
 
 ### Making an asynchronous `Vfs` work
 
