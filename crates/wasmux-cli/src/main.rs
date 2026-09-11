@@ -25,6 +25,7 @@ options:
         --memory <MiB>     total guest memory limit (default 256)
         --timeout <secs>   wall-clock limit for the whole run (default 60)
         --stream           write output as it appears rather than at the end
+                           (always on for a shell typed at a terminal)
         --stats            print syscalls and elapsed time to stderr
     -h, --help             this text
 
@@ -122,19 +123,24 @@ fn run() -> Result<u8, String> {
         return Ok(0);
     }
 
+    // A session typed at a terminal: no script, no command, and a keyboard on the other end.
+    // Such a session must stream, or a shell that never exits shows nothing at all.
+    let conversational = script.is_none()
+        && command.is_empty()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal();
+    stream |= conversational;
+
     let prepared = match (&script, command.split_first()) {
         (Some(text), _) => sandbox.shell(text),
         (None, Some((program, rest))) => sandbox.command(program).args(rest.to_vec()),
         (None, None) => sandbox.command("sh"),
     };
-    // Standard input is fed only when a program actually asks for it. Reading it up front
-    // would block on a pipe that nobody is writing to, which is what an interactive shell
-    // looks like from here.
-    let prepared = if std::io::stdin().is_terminal() {
-        prepared
-    } else {
-        prepared.interactive_stdin()
-    };
+    // Standard input is fed only when a program actually asks for it, terminal or pipe alike.
+    // Reading it up front would block on a pipe that nobody is writing to, which is what an
+    // interactive shell looks like from here. `drive` answers each request and closes the
+    // stream at end of file, so a redirected stdin still ends the way the guest expects.
+    let prepared = prepared.interactive_stdin();
 
     let started = Instant::now();
     let mut session = prepared.spawn().map_err(|e| e.to_string())?;
@@ -162,21 +168,19 @@ fn run() -> Result<u8, String> {
 /// Step the session to completion, optionally writing output as it appears.
 fn drive(session: &mut Session, stream: bool) -> Result<Output, String> {
     loop {
+        let progress = session
+            .step(Budget::syscalls(20_000))
+            .map_err(|e| e.to_string())?;
+        // Drain after the step that produced the output and before anything that blocks on
+        // the user. Draining at the top of the loop instead would hold a command's output
+        // until the next one was typed, because the wait for standard input comes first.
         if stream {
             let _ = std::io::stdout().write_all(&session.take_stdout());
+            let _ = std::io::stdout().flush();
             let _ = std::io::stderr().write_all(&session.take_stderr());
         }
-        match session
-            .step(Budget::syscalls(20_000))
-            .map_err(|e| e.to_string())?
-        {
-            Progress::Done(output) => {
-                if stream {
-                    let _ = std::io::stdout().write_all(&session.take_stdout());
-                    let _ = std::io::stderr().write_all(&session.take_stderr());
-                }
-                return Ok(output);
-            }
+        match progress {
+            Progress::Done(output) => return Ok(output),
             Progress::Yielded => {}
             Progress::Waiting(Wait::Stdin) => {
                 let mut chunk = [0u8; 8192];
