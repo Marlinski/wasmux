@@ -25,9 +25,18 @@ path = "src/bin/wasmux-corpus.rs"
 # The backend is chosen the same way a consumer chooses it, by feature, so building the CLI
 # for wasm32 exercises exactly what an integrator gets.
 [features]
-default = ["aot", "interp"]
+default = ["aot", "interp", "tty"]
 aot = ["wasmux/aot"]
 interp = ["wasmux/interp"]
+# A terminal for an interactive session. On here because this binary's whole job is to be the
+# thing a person types at; a library consumer decides separately, and gets it off by default.
+tty = ["wasmux/tty", "dep:libc"]
 
 [dependencies]
 wasmux = { workspace = true, features = ["host-vfs", "corpus"] }
+
+# Only to put this process's own terminal into raw mode when the guest asks for it: there is
+# no other way to reach `tcsetattr`, and the library itself stays dependency-free. Unix only,
+# because that is where a terminal is; the wasm32 build of this CLI has none.
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }

@@ -8,3 +8,6 @@ target/
 # Everything the toolchain downloads or generates.
 toolchain/build/
 .direnv/
+
+# BusyBox hush writes this into whatever directory an interactive session mounts.
+.hush_history

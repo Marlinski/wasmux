@@ -231,6 +231,8 @@ impl Sandbox {
             cwd: self.inner.cwd.clone(),
             stdin: Vec::new(),
             stdin_closed: true,
+            #[cfg(feature = "tty")]
+            terminal: None,
         }
     }
 
@@ -488,6 +490,8 @@ pub struct Command<'a> {
     cwd: String,
     stdin: Vec<u8>,
     stdin_closed: bool,
+    #[cfg(feature = "tty")]
+    terminal: Option<(u16, u16)>,
 }
 
 impl Command<'_> {
@@ -530,6 +534,26 @@ impl Command<'_> {
     /// Leave standard input open, to be fed with [`Session::write_stdin`].
     pub fn interactive_stdin(mut self) -> Self {
         self.stdin_closed = false;
+        self
+    }
+
+    /// Tell the guest its standard streams are a terminal `columns` by `rows`.
+    ///
+    /// Off by default, and the default is what an agent wants: with no terminal `isatty` says
+    /// no, which keeps `jq` from emitting colour codes and keeps a shell out of its line
+    /// editor, so what comes back is text rather than a recording of a screen. Pass this only
+    /// when a person is at a keyboard on the other end of the streams.
+    ///
+    /// With a terminal, a shell runs its interactive path: a real prompt, expanded from `PS1`.
+    /// Line editing, history and completion need one thing more — the guest will ask for raw
+    /// mode, and the host has to match it, or both ends echo every keystroke. Poll
+    /// [`Session::terminal_raw`] each time round the loop and put your own terminal into raw
+    /// mode when it says so.
+    ///
+    /// Requires the `tty` feature.
+    #[cfg(feature = "tty")]
+    pub fn terminal(mut self, columns: u16, rows: u16) -> Self {
+        self.terminal = Some((columns, rows));
         self
     }
 
@@ -585,6 +609,10 @@ impl Command<'_> {
             .iter()
             .map(|(k, v)| format!("{k}={v}").into_bytes())
             .collect();
+        #[cfg(feature = "tty")]
+        if let Some((columns, rows)) = self.terminal {
+            kernel.set_terminal(columns, rows);
+        }
         kernel.spawn_first(index, path, argv, envp, self.cwd.clone())?;
         kernel.shared.stdin.data.extend(self.stdin.iter().copied());
         kernel.shared.stdin.closed = self.stdin_closed;
@@ -757,6 +785,33 @@ impl Session {
     /// Syscalls served so far, which is the cheapest measure of work done.
     pub fn syscall_count(&self) -> u64 {
         self.kernel.shared.syscalls
+    }
+
+    /// Whether the guest has put its terminal into raw mode, and the host should match.
+    ///
+    /// Always false without [`Command::terminal`]. With it, this is how a shell says it has
+    /// taken over line editing: it has cleared `ICANON`, so it wants a keystroke at a time
+    /// and will echo and erase for itself. Until the host stops doing the same, every
+    /// keystroke appears twice. It flips back while a command runs and again for the next
+    /// line, so read it every time round the loop rather than once.
+    ///
+    /// Requires the `tty` feature.
+    #[cfg(feature = "tty")]
+    pub fn terminal_raw(&self) -> bool {
+        self.kernel.terminal_raw()
+    }
+
+    /// Whether the guest still wants Ctrl-C and friends to raise signals.
+    ///
+    /// A shell clears this for the length of a line, because it handles Ctrl-C itself while
+    /// editing, and restores it to run a command. Mirror it the same way as
+    /// [`Session::terminal_raw`]: a host that keeps generating signals when the guest asked
+    /// for the bytes will kill the wrong thing.
+    ///
+    /// Requires the `tty` feature.
+    #[cfg(feature = "tty")]
+    pub fn terminal_signals(&self) -> bool {
+        self.kernel.terminal_signals()
     }
 
     fn collect(&mut self, status: i32) -> Output {

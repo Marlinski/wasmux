@@ -22,6 +22,9 @@ pub(crate) mod mem;
 pub(crate) mod path;
 pub(crate) mod syscall;
 pub(crate) mod task;
+/// The terminal a session may be given. Off unless the embedder asks for one.
+#[cfg(feature = "tty")]
+pub(crate) mod tty;
 
 use crate::engine::{Exit, Instance, Program, Suspend, TrapKind};
 use crate::slab::Slab;
@@ -105,6 +108,11 @@ pub(crate) struct Shared {
     pub(crate) started: Instant,
     /// Syscalls served, for accounting and tests.
     pub(crate) syscalls: u64,
+    /// The terminal this session was given, if it was given one. `None` is the default and
+    /// the only thing an agent should ever see: with no terminal, `isatty` says no and every
+    /// terminal `ioctl` is `ENOTTY`, exactly as before this existed.
+    #[cfg(feature = "tty")]
+    pub(crate) terminal: Option<tty::Terminal>,
 }
 
 /// One program the sandbox can run, and where it appears in the namespace.
@@ -398,10 +406,36 @@ impl Kernel {
                 host_pending: false,
                 started: Instant::now(),
                 syscalls: 0,
+                #[cfg(feature = "tty")]
+                terminal: None,
             },
             procs: Vec::new(),
             exit_status: None,
         }
+    }
+
+    /// Give this session a terminal of the given size. Before the first process starts.
+    #[cfg(feature = "tty")]
+    pub(crate) fn set_terminal(&mut self, cols: u16, rows: u16) {
+        self.shared.terminal = Some(tty::Terminal::new(cols, rows));
+    }
+
+    /// Whether the guest has put the terminal into raw mode, so the host can match it.
+    #[cfg(feature = "tty")]
+    pub(crate) fn terminal_raw(&self) -> bool {
+        self.shared
+            .terminal
+            .as_ref()
+            .is_some_and(|t| t.termios.raw())
+    }
+
+    /// Whether the guest still wants Ctrl-C to raise a signal rather than arrive as a byte.
+    #[cfg(feature = "tty")]
+    pub(crate) fn terminal_signals(&self) -> bool {
+        self.shared
+            .terminal
+            .as_ref()
+            .is_some_and(|t| t.termios.signals())
     }
 
     /// Start the first process. Its descriptors are standard input, output and error.

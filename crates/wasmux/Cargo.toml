@@ -27,6 +27,12 @@ interp = ["dep:wasmi"]
 corpus = []
 # `HostVfs`, a `Vfs` over `std::fs`. For the CLI and the tests, not for a guest.
 host-vfs = []
+# A session may be given a terminal, so `isatty` says yes on its standard streams and a shell
+# runs its interactive path: a real prompt, and with the host mirroring `Session::terminal_raw`,
+# real line editing and history. Off by default and off at run time even when compiled in: an
+# agent's streams are buffers, and a program that believes in a terminal emits colour and
+# escape sequences into what the agent reads. For a person at a keyboard, not for a tool.
+tty = []
 
 [dependencies]
 # The core carries no dependencies at all. Each engine brings its own, and only
@@ -42,7 +48,7 @@ wasmi = { version = "2", optional = true, default-features = false, features = [
 ] }
 
 [dev-dependencies]
-wasmux = { path = ".", features = ["interp", "host-vfs", "corpus"] }
+wasmux = { path = ".", features = ["interp", "host-vfs", "corpus", "tty"] }
 
 [lints.rust]
 missing_docs = "warn"

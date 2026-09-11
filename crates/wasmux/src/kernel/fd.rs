@@ -99,13 +99,15 @@ impl Desc {
         matches!(self.flags & O_ACCMODE, O_RDONLY | O_RDWR)
     }
 
-    /// Whether `isatty` should say yes.
+    /// Whether this is one of the session's standard streams.
     ///
-    /// Always no. The session's standard streams are buffers the host owns, so a program that
-    /// asks is told what is true: this is a pipe. That keeps `jq` from emitting colour codes
-    /// and keeps a shell out of its line-editing path, which is what a tool wants.
-    pub(crate) fn is_tty(&self) -> bool {
-        false
+    /// Only these can be a terminal, and only when the session was given one — see
+    /// `kernel::tty`. Without a terminal a program that asks is told what is true: these are
+    /// buffers the host owns, which keeps `jq` from emitting colour codes and keeps a shell
+    /// out of its line-editing path, and is what an agent wants. With one, they are the
+    /// terminal, because a terminal is exactly what the host has on the other end of them.
+    pub(crate) fn is_std_stream(&self) -> bool {
+        matches!(self.kind, DescKind::Stdin | DescKind::Stdout(_))
     }
 }
 
