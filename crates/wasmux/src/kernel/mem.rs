@@ -125,9 +125,14 @@ impl<'a> Mem<'a> {
     /// "applet not found". `timeout`, `time`, `nohup` and every other applet that re-executes
     /// were broken by it, silently and only on this platform.
     pub(crate) fn cstr_bytes(&self, at: u32) -> VfsResult<Vec<u8>> {
+        self.cstr_bytes_upto(at, Self::MAX_STR)
+    }
+
+    /// [`Mem::cstr_bytes`] with a cap of the caller's choosing.
+    fn cstr_bytes_upto(&self, at: u32, cap: usize) -> VfsResult<Vec<u8>> {
         let start = at as usize;
         let rest = self.bytes.get(start..).ok_or(Errno::FAULT)?;
-        let capped = rest.get(..rest.len().min(Self::MAX_STR)).unwrap_or(rest);
+        let capped = rest.get(..rest.len().min(cap)).unwrap_or(rest);
         let end = capped
             .iter()
             .position(|&b| b == 0)
@@ -136,18 +141,38 @@ impl<'a> Mem<'a> {
     }
 
     /// A NULL-terminated array of string pointers at `at`, as `argv` and `envp` are passed.
+    ///
+    /// Each string may be as long as Linux allows one to be, [`Mem::MAX_ARG_STRLEN`], not a
+    /// path's length. BusyBox's no-MMU `fork` re-executes the shell with the subshell's
+    /// variables in its arguments, so with a path's cap any `$( )` or pipeline stage that
+    /// could see a variable over 4 KiB — one `curl` response in a shell variable — failed
+    /// with "can't re-execute the shell".
     pub(crate) fn cstr_array(&self, at: u32) -> VfsResult<Vec<Vec<u8>>> {
         let mut out = Vec::new();
         if at == 0 {
             return Ok(out);
         }
+        let mut total = 0usize;
         let mut p = at;
         loop {
             let item = self.u32(p)?;
             if item == 0 {
                 return Ok(out);
             }
-            out.push(self.cstr_bytes(item)?);
+            let s = self
+                .cstr_bytes_upto(item, Self::MAX_ARG_STRLEN)
+                .map_err(|e| {
+                    if e == Errno::NAMETOOLONG {
+                        Errno::TOOBIG
+                    } else {
+                        e
+                    }
+                })?;
+            total = total.saturating_add(s.len()).saturating_add(1);
+            if total > Self::MAX_ARG_TOTAL {
+                return Err(Errno::TOOBIG);
+            }
+            out.push(s);
             if out.len() >= Self::MAX_ARGS {
                 return Err(Errno::TOOBIG);
             }
@@ -176,6 +201,10 @@ impl<'a> Mem<'a> {
     pub(crate) const MAX_STR: usize = 4096;
     /// Most entries in one `argv` or `envp`.
     pub(crate) const MAX_ARGS: usize = 4096;
+    /// Longest single `argv` or `envp` string, Linux's `MAX_ARG_STRLEN`.
+    pub(crate) const MAX_ARG_STRLEN: usize = 128 * 1024;
+    /// Most bytes in one `argv` or `envp`, strings and terminators: Linux's usual `ARG_MAX`.
+    pub(crate) const MAX_ARG_TOTAL: usize = 2 * 1024 * 1024;
 }
 
 #[cfg(test)]

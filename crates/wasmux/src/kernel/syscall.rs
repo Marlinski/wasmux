@@ -1558,7 +1558,10 @@ fn sys_brk(ctx: &mut Ctx, s: &mut dyn Suspend, request: u32) -> Sys {
         return Ok(current as i32);
     }
     match s.mem_grow(pages) {
-        Some(_) => Ok(request as i32),
+        Some(_) => {
+            ctx.exec.grown = ctx.exec.grown.saturating_add(bytes);
+            Ok(request as i32)
+        }
         None => {
             ctx.shared().release_memory(bytes);
             Ok(current as i32)
@@ -1591,6 +1594,7 @@ fn sys_mmap(ctx: &mut Ctx, s: &mut dyn Suspend, a: [i32; 6]) -> Sys {
         ctx.shared().release_memory(bytes);
         return Err(Errno::NOMEM.into());
     };
+    ctx.exec.grown = ctx.exec.grown.saturating_add(bytes);
     let at = previous.saturating_mul(super::PAGE) as u32;
     if flags & MAP_ANONYMOUS == 0 {
         // A file mapping is a read, once: there is no page fault to make it lazy.

@@ -252,6 +252,11 @@ pub(crate) struct ExecState {
     /// effect for as long as the call is blocked, because that mask is what decides which
     /// signal wakes it.
     pub(crate) mask_to_restore: Option<u64>,
+    /// Memory `brk` and `mmap` added to the instance after it started, already charged to the
+    /// session. It is returned with the instance, on exit or exec, like the initial charge: a
+    /// heap a process grew does not outlive it. A vfork child runs in its parent's instance, so
+    /// what it grows lands here too and is returned with that instance.
+    pub(crate) grown: u64,
 }
 
 impl Ctx {
@@ -504,11 +509,9 @@ impl Kernel {
             .map(|a| String::from_utf8_lossy(a).into_owned())
             .unwrap_or_default();
         task.reset_handlers_for_exec();
-        let entry = self
-            .shared
-            .programs
-            .get(program)
-            .ok_or(crate::engine::LoadError::NotWasm)?;
+        let Some(entry) = self.shared.programs.get(program) else {
+            return Err(self.abandon(task.fds, crate::engine::LoadError::NotWasm));
+        };
         let kind = match &entry.kind {
             ProgramKind::Guest(module) => Either::Guest(module.clone()),
             ProgramKind::Host(command) => Either::Host(command.clone()),
@@ -544,18 +547,23 @@ impl Kernel {
             Either::Guest(module) => module,
         };
         let ctx_ptr = (&mut *ctx) as *mut Ctx as *mut core::ffi::c_void;
-        let mut instance = module.instantiate(ctx_ptr)?;
+        let mut instance = match module.instantiate(ctx_ptr) {
+            Ok(instance) => instance,
+            Err(e) => return Err(self.abandon(core::mem::take(&mut ctx.task.fds), e)),
+        };
         // Reserve the Asyncify scratch area at the top of the guest's memory.
         let base = instance.mem_size();
         let charge = base.saturating_add(ASYNCIFY_PAGES.saturating_mul(PAGE));
         if !self.shared.charge_memory(charge) {
-            return Err(crate::engine::LoadError::OutOfMemory);
+            let fds = core::mem::take(&mut ctx.task.fds);
+            return Err(self.abandon(fds, crate::engine::LoadError::OutOfMemory));
         }
         match instance.mem_grow(ASYNCIFY_PAGES) {
             Some(old) => ctx.exec.asyncify_data = (old.saturating_mul(PAGE)) as u32,
             None => {
                 self.shared.release_memory(charge);
-                return Err(crate::engine::LoadError::OutOfMemory);
+                let fds = core::mem::take(&mut ctx.task.fds);
+                return Err(self.abandon(fds, crate::engine::LoadError::OutOfMemory));
             }
         }
         self.procs.push(Proc {
@@ -566,6 +574,20 @@ impl Kernel {
             parked: false,
         });
         Ok(())
+    }
+
+    /// A process that could not be started gives back the descriptors it was handed.
+    ///
+    /// They are references like any others: a pipe's write end kept by a process that never ran
+    /// is one its reader waits on forever, and the session ends in a deadlock rather than with
+    /// the reader seeing end of file and the failed command reported as one.
+    fn abandon(
+        &mut self,
+        fds: FdTable,
+        error: crate::engine::LoadError,
+    ) -> crate::engine::LoadError {
+        self.shared.release_fds(fds);
+        error
     }
 
     /// Run until something has to be reported. `budget` bounds the syscalls served, so that a
@@ -894,7 +916,7 @@ impl Kernel {
         let Some(spawn) = proc.ctx.exec_request.take() else {
             return ProcStep::Ended(task::status_exited(126));
         };
-        let charged = proc.charged;
+        let charged = proc.charged.saturating_add(proc.ctx.exec.grown);
         let old = self.procs.remove(index);
         drop(old);
         self.shared.release_memory(charged);
@@ -927,7 +949,8 @@ impl Kernel {
             ..
         } = proc;
         drop(body);
-        self.shared.release_memory(charged);
+        self.shared
+            .release_memory(charged.saturating_add(ctx.exec.grown));
         // A vfork child still inside this instance dies with it.
         while let Some(parent) = ctx.vfork_stack.pop() {
             let child = core::mem::replace(&mut ctx.task, parent);
